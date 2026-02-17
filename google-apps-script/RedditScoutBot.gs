@@ -1,13 +1,17 @@
 /**
  * ============================================================
- * REDDIT SCOUT BOT v7 - Cloud Context Matching (No Emojis)
+ * REDDIT SCOUT BOT v8 - Fast + 8 Posts (fits in 6 min limit)
  * ============================================================
  *
- * Finds 7-8 cloud-related Reddit posts from the last 4 days
- * where you can naturally talk about ZopNight or ZopDay.
+ * Google Apps Script has a 6 minute execution limit.
+ * This version is optimized to stay under that limit:
+ *   - 15 subreddits (not 25)
+ *   - 8 search queries (not 45)
+ *   - Hot + New + Top browsing does the heavy lifting
+ *   - 1 second delays (not 2)
  *
- * ZopNight: Auto-shutdown idle non-prod cloud resources
- * ZopDay: Cloud cost visibility + guardrails + auto-enforce
+ * Finds 8 cloud-related Reddit posts from last 4 days
+ * where you can naturally talk about ZopNight or ZopDay.
  *
  * COST: $0 (completely free)
  * ============================================================
@@ -17,31 +21,23 @@ var YOUR_EMAIL = "muskan.bandta@zop.dev";
 var MAX_AGE_DAYS = 4;
 var TARGET_POST_COUNT = 8;
 
+// 15 best subreddits (not 25 — saves API calls)
 var TARGET_SUBREDDITS = [
   "aws", "devops", "cloudcomputing", "sysadmin", "kubernetes",
   "FinOps", "googlecloud", "azure", "terraform", "docker",
-  "sre", "platform_engineering", "startups", "SaaS",
-  "ITManagers", "Entrepreneur", "selfhosted", "developersIndia",
-  "cscareerquestions", "AZURE", "netsec", "homelab",
-  "ExperiencedDevs", "programming", "webdev"
+  "sre", "startups", "SaaS", "selfhosted", "Entrepreneur"
 ];
 
-// Broad search queries to catch maximum cloud posts
+// Only 8 high-value search queries (not 45 — saves 500+ API calls)
 var SEARCH_QUERIES = [
-  "cloud cost", "AWS bill", "reduce cost", "cloud waste",
-  "cost optimization", "cloud spend", "cloud budget",
-  "idle resources", "shutdown", "dev environment",
-  "staging", "kubernetes cost", "finops",
-  "cost management", "cost tool", "automation",
-  "infrastructure", "devops tool", "cloud tool",
-  "aws", "azure", "gcp", "cloud infrastructure",
-  "cloud migration", "cloud architecture",
-  "serverless", "lambda", "docker", "container",
-  "best practices", "lessons learned",
-  "mistake cloud", "tips cloud", "cloud project",
-  "ec2", "rds", "s3", "eks", "terraform",
-  "monitoring", "observability", "infrastructure as code",
-  "CI CD", "deployment", "scaling"
+  "cloud cost",
+  "AWS bill",
+  "finops",
+  "idle resources",
+  "cost optimization",
+  "dev environment",
+  "kubernetes cost",
+  "cloud waste"
 ];
 
 
@@ -147,32 +143,30 @@ var ZOPDAY_CONTEXTS = [
               "trusted advisor", "aws advisor", "cost explorer"] }
 ];
 
-// Broad cloud signals - ANY cloud post where you can steer to cost
+// Broad cloud signals
 var BROAD_CLOUD_SIGNALS = [
   {phrases: ["aws", "amazon web services"], weight: 4},
   {phrases: ["azure", "microsoft azure"], weight: 4},
   {phrases: ["gcp", "google cloud"], weight: 4},
-  {phrases: ["ec2", "rds", "lambda", "s3", "ebs", "elb", "ecs", "fargate", "sagemaker"], weight: 4},
+  {phrases: ["ec2", "rds", "lambda", "s3", "ebs", "ecs", "fargate"], weight: 4},
   {phrases: ["kubernetes", "k8s", "eks", "gke", "aks"], weight: 4},
-  {phrases: ["terraform", "pulumi", "cloudformation", "cdk", "ansible"], weight: 3},
-  {phrases: ["docker", "container", "pod", "helm", "compose"], weight: 3},
+  {phrases: ["terraform", "pulumi", "cloudformation", "cdk"], weight: 3},
+  {phrases: ["docker", "container", "pod", "helm"], weight: 3},
   {phrases: ["cloud infrastructure", "cloud architecture", "cloud migration", "cloud native"], weight: 4},
-  {phrases: ["cloud service", "cloud provider", "cloud platform", "cloud hosting"], weight: 3},
-  {phrases: ["serverless", "microservice", "api gateway"], weight: 3},
-  {phrases: ["devops", "sre", "platform engineering", "site reliability"], weight: 3},
-  {phrases: ["cost", "expensive", "pricing", "bill", "budget", "spend", "price"], weight: 5},
-  {phrases: ["save money", "reduce cost", "cut cost", "optimize", "optimise", "cheaper"], weight: 5},
+  {phrases: ["cloud service", "cloud provider", "cloud platform"], weight: 3},
+  {phrases: ["serverless", "microservice"], weight: 3},
+  {phrases: ["devops", "sre", "platform engineering"], weight: 3},
+  {phrases: ["cost", "expensive", "pricing", "bill", "budget", "spend"], weight: 5},
+  {phrases: ["save money", "reduce cost", "cut cost", "optimize"], weight: 5},
   {phrases: ["waste", "wasted", "unused", "idle", "orphan", "zombie"], weight: 5},
-  {phrases: ["automation", "automate", "automated", "scripting", "cron"], weight: 3},
-  {phrases: ["infrastructure as code", "iac", "ci/cd", "pipeline", "deployment"], weight: 3},
-  {phrases: ["manage", "management", "monitoring", "observability", "alerting"], weight: 2},
+  {phrases: ["automation", "automate", "automated"], weight: 3},
+  {phrases: ["infrastructure as code", "iac", "ci/cd", "pipeline"], weight: 3},
+  {phrases: ["monitoring", "observability", "alerting"], weight: 2},
   {phrases: ["best practice", "lesson learned", "tip", "advice", "recommend"], weight: 3},
   {phrases: ["production", "staging", "development", "environment"], weight: 3},
-  {phrases: ["scale", "scaling", "autoscaling", "load balancer"], weight: 2},
-  {phrases: ["security", "compliance", "governance", "policy"], weight: 2},
-  {phrases: ["database", "storage", "compute", "networking", "vpc"], weight: 2},
-  {phrases: ["startup", "saas", "bootstrapped", "indie", "side project"], weight: 2},
-  {phrases: ["devops tool", "cloud tool", "infrastructure tool", "platform tool"], weight: 3}
+  {phrases: ["scale", "scaling", "autoscaling"], weight: 2},
+  {phrases: ["database", "storage", "compute", "networking"], weight: 2},
+  {phrases: ["startup", "saas", "bootstrapped", "side project"], weight: 2}
 ];
 
 
@@ -180,42 +174,53 @@ var BROAD_CLOUD_SIGNALS = [
 // MAIN
 // ===========================================================
 function dailyScan() {
-  Logger.log("Reddit Scout v7 - Cloud Context Matching");
+  Logger.log("Reddit Scout v8 - Starting scan...");
+  var startTime = new Date().getTime();
 
-  var allPosts = fetchPosts();
-  Logger.log("Collected " + allPosts.length + " posts");
+  var allPosts = fetchPosts(startTime);
+  Logger.log("Collected " + allPosts.length + " posts in " + Math.round((new Date().getTime() - startTime)/1000) + "s");
 
   var scored = scoreAllPosts(allPosts);
-  Logger.log("Qualifying posts: " + scored.length);
+  Logger.log("Qualifying: " + scored.length);
 
   var top = scored.slice(0, TARGET_POST_COUNT);
 
   if (top.length > 0) {
     sendEmail(top, allPosts.length, scored.length);
-    Logger.log("Done! Sent " + top.length + " posts");
+    Logger.log("Done! Sent " + top.length + " posts in " + Math.round((new Date().getTime() - startTime)/1000) + "s total");
   } else {
     sendEmptyEmail(allPosts.length);
-    Logger.log("No matching posts today");
   }
 }
 
 
 // ===========================================================
-// FETCH
+// FETCH — Optimized to stay under 6 min
 // ===========================================================
-function fetchPosts() {
+function fetchPosts(startTime) {
   var seen = {};
   var results = [];
   var now = Math.floor(Date.now() / 1000);
   var maxAge = MAX_AGE_DAYS * 86400;
 
   for (var s = 0; s < TARGET_SUBREDDITS.length; s++) {
+    // Safety: stop if we're running too long (5 min = 300000ms)
+    if (new Date().getTime() - startTime > 300000) {
+      Logger.log("  TIME LIMIT - stopping fetch at r/" + TARGET_SUBREDDITS[s]);
+      break;
+    }
+
     var sub = TARGET_SUBREDDITS[s];
-    Logger.log("  r/" + sub);
     var count = 0;
 
+    // Strategy 1: Search (8 queries per sub = 8 API calls)
     for (var q = 0; q < SEARCH_QUERIES.length; q++) {
-      var posts = searchSub(sub, SEARCH_QUERIES[q]);
+      if (new Date().getTime() - startTime > 300000) break;
+
+      var posts = doFetch("https://www.reddit.com/r/" + sub + "/search.json"
+        + "?q=" + encodeURIComponent(SEARCH_QUERIES[q])
+        + "&restrict_sr=1&sort=new&t=week&limit=25&raw_json=1&type=link");
+
       for (var j = 0; j < posts.length; j++) {
         var p = posts[j];
         if (seen[p.id]) continue;
@@ -226,65 +231,71 @@ function fetchPosts() {
         results.push(p);
         count++;
       }
-      Utilities.sleep(2000);
+      Utilities.sleep(1000);  // 1 second (not 2)
     }
 
-    var browse = fetchSub(sub, "hot").concat(fetchSub(sub, "new")).concat(fetchSub(sub, "top"));
-    for (var b = 0; b < browse.length; b++) {
-      var p2 = browse[b];
-      if (seen[p2.id]) continue;
-      var age2 = now - p2.created_utc;
-      if (age2 > maxAge) continue;
-      seen[p2.id] = true;
-      p2.ageHours = Math.round(age2 / 3600);
-      results.push(p2);
-      count++;
+    // Strategy 2: Hot + New + Top (3 API calls per sub)
+    var feeds = ["hot", "new", "top"];
+    for (var f = 0; f < feeds.length; f++) {
+      if (new Date().getTime() - startTime > 300000) break;
+
+      var feedUrl = "https://www.reddit.com/r/" + sub + "/" + feeds[f] + ".json?limit=50&raw_json=1";
+      if (feeds[f] === "top") feedUrl += "&t=week";
+
+      var feedPosts = doFetch(feedUrl);
+      for (var fp = 0; fp < feedPosts.length; fp++) {
+        var p2 = feedPosts[fp];
+        if (seen[p2.id]) continue;
+        var age2 = now - p2.created_utc;
+        if (age2 > maxAge) continue;
+        seen[p2.id] = true;
+        p2.ageHours = Math.round(age2 / 3600);
+        results.push(p2);
+        count++;
+      }
+      Utilities.sleep(1000);
     }
 
-    Logger.log("    " + count + " posts");
-    Utilities.sleep(1500);
+    Logger.log("  r/" + sub + ": " + count + " posts");
   }
   return results;
 }
 
-function searchSub(sub, query) {
-  var url = "https://www.reddit.com/r/" + sub + "/search.json"
-    + "?q=" + encodeURIComponent(query)
-    + "&restrict_sr=1&sort=new&t=week&limit=25&raw_json=1&type=link";
-  try {
-    var r = UrlFetchApp.fetch(url, {
-      headers: {"User-Agent": "RedditScoutBot/7.0"}, muteHttpExceptions: true
-    });
-    if (r.getResponseCode() === 429) { Utilities.sleep(15000);
-      r = UrlFetchApp.fetch(url, {headers: {"User-Agent": "RedditScoutBot/7.0"}, muteHttpExceptions: true});
-    }
-    if (r.getResponseCode() !== 200) return [];
-    return JSON.parse(r.getContentText()).data.children.map(function(c) {
-      return { id: c.data.id, title: c.data.title, selftext: c.data.selftext || "",
-        subreddit: c.data.subreddit, author: c.data.author,
-        score: c.data.score, num_comments: c.data.num_comments,
-        created_utc: c.data.created_utc,
-        permalink: "https://www.reddit.com" + c.data.permalink };
-    });
-  } catch(e) { return []; }
-}
 
-function fetchSub(sub, sort) {
-  var url = "https://www.reddit.com/r/" + sub + "/" + sort + ".json?limit=50&raw_json=1";
-  if (sort === "top") url += "&t=week";
+// Single fetch function with error handling
+function doFetch(url) {
   try {
     var r = UrlFetchApp.fetch(url, {
-      headers: {"User-Agent": "RedditScoutBot/7.0"}, muteHttpExceptions: true
+      headers: {"User-Agent": "RedditScoutBot/8.0"},
+      muteHttpExceptions: true
     });
-    if (r.getResponseCode() !== 200) return [];
-    return JSON.parse(r.getContentText()).data.children.map(function(c) {
-      return { id: c.data.id, title: c.data.title, selftext: c.data.selftext || "",
-        subreddit: c.data.subreddit, author: c.data.author,
-        score: c.data.score, num_comments: c.data.num_comments,
-        created_utc: c.data.created_utc,
-        permalink: "https://www.reddit.com" + c.data.permalink };
-    });
-  } catch(e) { return []; }
+    if (r.getResponseCode() == 429) {
+      Utilities.sleep(10000);
+      r = UrlFetchApp.fetch(url, {
+        headers: {"User-Agent": "RedditScoutBot/8.0"},
+        muteHttpExceptions: true
+      });
+    }
+    if (r.getResponseCode() != 200) return [];
+    var data = JSON.parse(r.getContentText());
+    if (!data || !data.data || !data.data.children) return [];
+    var children = data.data.children;
+    var result = [];
+    for (var i = 0; i < children.length; i++) {
+      var d = children[i].data;
+      result.push({
+        id: d.id, title: d.title, selftext: d.selftext || "",
+        subreddit: d.subreddit, author: d.author,
+        score: d.score, num_comments: d.num_comments,
+        created_utc: d.created_utc,
+        permalink: "https://www.reddit.com" + d.permalink
+      });
+    }
+    return result;
+  } catch(e) {
+    Logger.log("  Fetch error: " + e.message);
+    return [];
+  }
 }
 
 
@@ -292,7 +303,9 @@ function fetchSub(sub, sort) {
 // SCORING
 // ===========================================================
 function scoreAllPosts(posts) {
-  return posts.map(function(post) {
+  var scored = [];
+  for (var idx = 0; idx < posts.length; idx++) {
+    var post = posts[idx];
     var text = (post.title + " " + post.selftext).toLowerCase();
 
     // Layer 1: Product context
@@ -333,11 +346,7 @@ function scoreAllPosts(posts) {
     }
     cloudScore = Math.min(cloudScore / 3, 10);
 
-    // Must be cloud-related
-    if (cloudScore < 0.5 && productContextScore < 0.5) {
-      post.overall = 0;
-      return post;
-    }
+    if (cloudScore < 0.5 && productContextScore < 0.5) continue;
 
     // Layer 3: Engagement
     var engagement = 1;
@@ -350,7 +359,7 @@ function scoreAllPosts(posts) {
     if (post.score >= 10) engagement += 1;
     if (post.score >= 30) engagement += 1;
     if (post.score >= 100) engagement += 1;
-    engagement = Math.min(engagement, 10);
+    if (engagement > 10) engagement = 10;
 
     var opp = 3;
     if (text.indexOf("?") !== -1) opp += 1;
@@ -358,60 +367,49 @@ function scoreAllPosts(posts) {
     if (text.indexOf("recommend") !== -1 || text.indexOf("advice") !== -1 || text.indexOf("suggest") !== -1 || text.indexOf("opinion") !== -1) opp += 2;
     if (text.indexOf("help") !== -1 || text.indexOf("looking for") !== -1 || text.indexOf("anyone") !== -1) opp += 1;
     if (text.indexOf("tool") !== -1 || text.indexOf("platform") !== -1 || text.indexOf("solution") !== -1) opp += 1;
-    opp = Math.min(opp, 10);
+    if (opp > 10) opp = 10;
 
-    // Combined
     var hasProductMatch = (nightMatches.length > 0 || dayMatches.length > 0);
     var overall;
     if (hasProductMatch) {
-      overall = Math.round(
-        (productContextScore * 0.40 + cloudScore * 0.15 + engagement * 0.25 + opp * 0.20) * 10
-      ) / 10;
+      overall = Math.round((productContextScore * 0.40 + cloudScore * 0.15 + engagement * 0.25 + opp * 0.20) * 10) / 10;
     } else {
-      overall = Math.round(
-        (cloudScore * 0.35 + engagement * 0.30 + opp * 0.25 + 1.0 * 0.10) * 10
-      ) / 10;
+      overall = Math.round((cloudScore * 0.35 + engagement * 0.30 + opp * 0.25 + 1.0 * 0.10) * 10) / 10;
     }
 
-    // Product label
+    if (overall < 3.0) continue;
+
     var product = "Both";
     if (nightScore > dayScore * 1.5) product = "ZopNight";
     else if (dayScore > nightScore * 1.5) product = "ZopDay";
     if (!hasProductMatch) {
-      if (text.indexOf("cost") !== -1 || text.indexOf("bill") !== -1 || text.indexOf("spend") !== -1 || text.indexOf("expensive") !== -1 || text.indexOf("waste") !== -1 || text.indexOf("save") !== -1 || text.indexOf("budget") !== -1) {
+      if (text.indexOf("cost") !== -1 || text.indexOf("bill") !== -1 || text.indexOf("spend") !== -1 || text.indexOf("expensive") !== -1 || text.indexOf("waste") !== -1 || text.indexOf("budget") !== -1) {
         product = "ZopNight";
-      } else if (text.indexOf("monitor") !== -1 || text.indexOf("dashboard") !== -1 || text.indexOf("visibility") !== -1 || text.indexOf("tag") !== -1) {
+      } else if (text.indexOf("monitor") !== -1 || text.indexOf("dashboard") !== -1 || text.indexOf("visibility") !== -1) {
         product = "ZopDay";
       }
     }
 
-    var angle = generateAngle(nightMatches, dayMatches, product, text, hasProductMatch);
-    var allMatches = nightMatches.concat(dayMatches);
-    var why = generateWhy(post, allMatches, cloudScore, hasProductMatch);
-
-    post.productContextScore = productContextScore;
-    post.cloudScore = cloudScore;
-    post.engagement = engagement;
-    post.opportunity = opp;
     post.overall = overall;
     post.product = product;
     post.nightMatches = nightMatches;
     post.dayMatches = dayMatches;
-    post.angle = angle;
-    post.why = why;
-    post.matchCount = allMatches.length;
     post.hasProductMatch = hasProductMatch;
+    post.angle = generateAngle(nightMatches, dayMatches, product, text, hasProductMatch);
+    post.why = generateWhy(post, nightMatches.concat(dayMatches), hasProductMatch);
 
-    return post;
+    scored.push(post);
+  }
 
-  }).filter(function(post) {
-    return post.overall >= 3.0;
-  }).sort(function(a, b) {
+  // Sort: product matches first, then by score
+  scored.sort(function(a, b) {
     if (a.hasProductMatch && !b.hasProductMatch) return -1;
     if (!a.hasProductMatch && b.hasProductMatch) return 1;
     if (b.overall !== a.overall) return b.overall - a.overall;
     return b.num_comments - a.num_comments;
   });
+
+  return scored;
 }
 
 
@@ -420,48 +418,42 @@ function scoreAllPosts(posts) {
 // ===========================================================
 function generateAngle(nightMatches, dayMatches, product, text, hasProductMatch) {
   if (nightMatches.indexOf("Non-prod running 24/7") !== -1)
-    return "PERFECT FIT: 'We had the same problem -- dev/staging running 24/7 burning cash. Set up auto-shutdown for nights/weekends = 50% saved. Dependency-aware so things shut down in the right order.' -> zop.dev/zopnight";
+    return "PERFECT FIT: 'We had same problem -- dev/staging running 24/7 burning cash. Auto-shutdown for nights/weekends = 50% saved. Dependency-aware, shuts down in right order.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Scheduling shutdown") !== -1)
-    return "PERFECT FIT: 'We use scheduled shutdown for all non-prod. Dependency-aware so DBs shutdown after apps, start in reverse. Agentless, multi-cloud, 2-min setup.' -> zop.dev/zopnight";
+    return "PERFECT FIT: 'We use scheduled shutdown for all non-prod. Dependency-aware, DBs shutdown after apps. Agentless, multi-cloud, 2-min setup.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Idle/unused resources") !== -1)
-    return "Share: 'Biggest source of idle resources = dev/staging running nights/weekends when nobody uses them. Auto-shutdown for off-hours = single biggest cost win (40-60%).' -> zop.dev/zopnight";
+    return "'Biggest idle resource source = dev/staging running nights/weekends. Auto-shutdown for off-hours = single biggest cost win (40-60%).' -> zop.dev/zopnight";
   if (nightMatches.indexOf("High cloud bill") !== -1)
-    return "Empathize then share: 'Quick win: schedule non-prod to auto-shutdown at night/weekends. Paying 24/7 for envs used 8hrs/day = 76% waste. Auto-shutdown = instant 40-60% savings.' -> zop.dev/zopnight";
+    return "'Quick win: schedule non-prod auto-shutdown at night/weekends. Paying 24/7 for 8hrs/day usage = 76% waste. Auto-shutdown = 40-60% savings.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Environment cost") !== -1)
-    return "Share: 'Dev/test envs are #1 cloud waste source. Fix: auto-shutdown schedules. Each dev gets env auto-started 9am, shutdown 7pm. Weekends off. 50%+ savings.' -> zop.dev/zopnight";
+    return "'Dev/test envs = #1 cloud waste. Fix: auto-shutdown schedules. Env starts 9am, stops 7pm, weekends off. 50%+ savings.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("K8s cost") !== -1)
-    return "K8s angle: 'For non-prod K8s, biggest win is shutting down dev/staging clusters during off-hours. Scale to 0 at night/weekends = 40-60% savings.' -> zop.dev/zopnight";
+    return "'For non-prod K8s, shut down dev/staging clusters during off-hours. Scale to 0 at night/weekends = 40-60% savings.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Startup burn rate") !== -1)
-    return "Startup angle: '2-min quick win: auto-shutdown non-prod at night/weekends. Paying 24/7 for 40hrs/week usage = 76% waste. Agentless, 40-60% savings.' -> zop.dev/zopnight";
+    return "'2-min quick win: auto-shutdown non-prod at night/weekends. 24/7 for 40hrs/week = 76% waste. Agentless, 40-60% savings.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("FinOps") !== -1)
-    return "FinOps angle: 'Overlooked FinOps quick win: non-prod scheduling. Dev/staging running 24/7 but used 40hrs/week. Auto-shutdown = lowest-effort, highest-ROI win.' -> zop.dev/zopnight";
+    return "'Overlooked FinOps quick win: non-prod scheduling. Dev/staging running 24/7 but used 40hrs/week. Auto-shutdown = highest-ROI win.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Cost automation") !== -1)
-    return "Automation angle: 'Best cost automation: auto-shutdown of non-prod during off-hours. Dashboards show waste, automation fixes it.' -> zop.dev/zopnight";
+    return "'Best cost automation: auto-shutdown non-prod during off-hours. Dashboards show waste, automation fixes it.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Cloud cost tools") !== -1)
-    return "Tool rec: 'Most tools show dashboards but dont act. The gap is automation -- auto-shutdown of non-prod during off-hours = 40-60% savings.' -> zop.dev/zopnight";
-  if (nightMatches.indexOf("Right-sizing") !== -1)
-    return "Share: 'Right-sizing is great for prod. For non-prod, bigger win = shut them down when nobody uses them (nights/weekends). 40-60% savings.' -> zop.dev/zopnight";
+    return "'Most tools show dashboards but dont act. Gap = automation. Auto-shutdown non-prod off-hours = 40-60% savings.' -> zop.dev/zopnight";
   if (nightMatches.indexOf("Cost visibility") !== -1 || dayMatches.indexOf("Cost visibility") !== -1)
-    return "ZopDay: 'Visibility is step 1, but most stop there. Need visibility + guardrails that auto-enforce policies. Not dashboards you check monthly.' -> zop.dev/zopday";
+    return "ZopDay: 'Visibility is step 1, but most stop there. Need guardrails that auto-enforce policies, not dashboards you check monthly.' -> zop.dev/zopday";
   if (dayMatches.indexOf("Cost guardrails") !== -1)
-    return "ZopDay: 'Budget alerts notify but dont prevent. Guardrails that enforce policy automatically -- if team exceeds budget, automation kicks in.' -> zop.dev/zopday";
-  if (dayMatches.indexOf("Tagging compliance") !== -1)
-    return "ZopDay: 'Tag enforcement is key -- untagged resources = invisible cost. Auto-enforce tagging + cost allocation = real visibility.' -> zop.dev/zopday";
+    return "ZopDay: 'Budget alerts notify but dont prevent. Need guardrails that enforce policy automatically.' -> zop.dev/zopday";
 
   if (!hasProductMatch) {
-    if (text.indexOf("cost") !== -1 || text.indexOf("bill") !== -1 || text.indexOf("expensive") !== -1 || text.indexOf("spend") !== -1)
-      return "Cloud cost discussion -> share: 'One quick win many miss: scheduling non-prod auto-shutdown for nights/weekends. Dev/staging runs 24/7 but used 40hrs/week. 40-60% savings.' -> zop.dev/zopnight";
-    if (text.indexOf("kubernetes") !== -1 || text.indexOf("k8s") !== -1 || text.indexOf("eks") !== -1)
-      return "K8s discussion -> steer to cost: 'Non-prod K8s clusters are massive cost drain. Auto-scheduling shutdown during off-hours saved us 40-60%.' -> zop.dev/zopnight";
-    if (text.indexOf("terraform") !== -1 || text.indexOf("infrastructure as code") !== -1)
-      return "IaC discussion -> share: 'Beyond IaC, one win we added: auto-shutdown schedules for non-prod. Terraform provisions it, auto-shutdown ensures it doesnt run when nobody needs it.' -> zop.dev/zopnight";
+    if (text.indexOf("cost") !== -1 || text.indexOf("bill") !== -1 || text.indexOf("expensive") !== -1)
+      return "Cloud cost talk -> 'Quick win many miss: non-prod auto-shutdown nights/weekends. Dev/staging runs 24/7 but used 40hrs/week. 40-60% savings.' -> zop.dev/zopnight";
+    if (text.indexOf("kubernetes") !== -1 || text.indexOf("k8s") !== -1)
+      return "K8s talk -> 'Non-prod K8s clusters = massive cost drain. Auto-shutdown during off-hours saved us 40-60%.' -> zop.dev/zopnight";
+    if (text.indexOf("terraform") !== -1 || text.indexOf("iac") !== -1)
+      return "IaC talk -> 'Beyond IaC: auto-shutdown non-prod. Terraform provisions, auto-shutdown ensures it doesnt run idle.' -> zop.dev/zopnight";
     if (text.indexOf("aws") !== -1 || text.indexOf("azure") !== -1 || text.indexOf("gcp") !== -1)
-      return "Cloud discussion -> add value: 'Pro tip for non-prod: auto-shutdown during off-hours = instant 40-60% savings. Most teams dont realize non-prod runs 76% idle.' -> zop.dev/zopnight";
+      return "Cloud talk -> 'Pro tip: auto-shutdown non-prod off-hours = 40-60% savings. Most teams dont realize non-prod runs 76% idle.' -> zop.dev/zopnight";
     if (text.indexOf("devops") !== -1 || text.indexOf("sre") !== -1 || text.indexOf("automation") !== -1)
-      return "DevOps discussion -> share: 'One automation that paid for itself: auto-shutdown of non-prod at night/weekends. Zero code changes, 40-60% cost savings.' -> zop.dev/zopnight";
-    if (text.indexOf("startup") !== -1 || text.indexOf("saas") !== -1 || text.indexOf("bootstrap") !== -1)
-      return "Startup discussion -> share cloud tip: 'Quick win: auto-shutdown non-prod at night/weekends. Most startups pay 24/7 for dev envs used 40hrs/week.' -> zop.dev/zopnight";
-    return "Join discussion with cloud cost insights. Share how non-prod auto-shutdown saves 40-60% as practical tip. -> zop.dev/zopnight";
+      return "DevOps talk -> 'One automation that paid for itself: auto-shutdown non-prod at night/weekends. Zero code changes, 40-60% savings.' -> zop.dev/zopnight";
+    return "Join with cloud cost tip: non-prod auto-shutdown saves 40-60%. -> zop.dev/zopnight";
   }
 
   return "Share cloud cost experience -- automation over dashboards, non-prod scheduling. -> zop.dev";
@@ -471,26 +463,21 @@ function generateAngle(nightMatches, dayMatches, product, text, hasProductMatch)
 // ===========================================================
 // WHY
 // ===========================================================
-function generateWhy(post, allMatches, cloudScore, hasProductMatch) {
+function generateWhy(post, allMatches, hasProductMatch) {
   var reasons = [];
-  if (post.num_comments >= 50) reasons.push("Hot thread (" + post.num_comments + " comments)");
+  if (post.num_comments >= 50) reasons.push("Hot (" + post.num_comments + " comments)");
   else if (post.num_comments >= 20) reasons.push("Active (" + post.num_comments + " comments)");
   else if (post.num_comments >= 5) reasons.push(post.num_comments + " comments");
-  else if (post.num_comments >= 1) reasons.push(post.num_comments + " comment" + (post.num_comments > 1 ? "s" : ""));
+  else if (post.num_comments >= 1) reasons.push(post.num_comments + " comments");
 
-  if (post.score >= 50) reasons.push(post.score + " upvotes");
-  else if (post.score >= 10) reasons.push(post.score + " upvotes");
+  if (post.score >= 10) reasons.push(post.score + " upvotes");
 
-  if (hasProductMatch) {
-    if (allMatches.length >= 2) reasons.push("Matches " + allMatches.length + " product contexts");
-    else if (allMatches.length === 1) reasons.push("Context: " + allMatches[0]);
-  } else {
-    reasons.push("Cloud discussion (steer to cost)");
-  }
+  if (hasProductMatch && allMatches.length >= 1) reasons.push("Context: " + allMatches[0]);
+  if (!hasProductMatch) reasons.push("Cloud discussion");
 
-  var title = post.title.toLowerCase();
-  if (title.indexOf("?") !== -1) reasons.push("Asking question");
-  if (title.indexOf("tool") !== -1 || title.indexOf("recommend") !== -1) reasons.push("Wants tool recs");
+  var t = post.title.toLowerCase();
+  if (t.indexOf("?") !== -1) reasons.push("Question");
+  if (t.indexOf("tool") !== -1 || t.indexOf("recommend") !== -1) reasons.push("Tool recs");
 
   reasons.push("r/" + post.subreddit);
   return reasons.join(" | ");
@@ -498,7 +485,7 @@ function generateWhy(post, allMatches, cloudScore, hasProductMatch) {
 
 
 // ===========================================================
-// EMAIL - No emojis anywhere
+// EMAIL - No emojis
 // ===========================================================
 function sendEmail(posts, totalScanned, totalFiltered) {
   var today = Utilities.formatDate(new Date(), "Asia/Kolkata", "EEEE, MMMM d, yyyy");
@@ -506,9 +493,9 @@ function sendEmail(posts, totalScanned, totalFiltered) {
   var html = '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:700px;margin:0 auto;background:#f8fafc;padding:20px;">';
 
   html += '<div style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:24px;border-radius:12px;margin-bottom:20px;">';
-  html += '<h1 style="color:#f97316;margin:0;font-size:22px;">ZopNight & ZopDay - Reddit Opportunities</h1>';
+  html += '<h1 style="color:#f97316;margin:0;font-size:22px;">ZopNight and ZopDay - Reddit Opportunities</h1>';
   html += '<p style="color:#94a3b8;margin:8px 0 0 0;font-size:14px;">' + today + ' | Last ' + MAX_AGE_DAYS + ' days</p>';
-  html += '<p style="color:#cbd5e1;margin:8px 0 0 0;font-size:13px;">' + totalScanned + ' posts scanned > ' + totalFiltered + ' cloud matches > Top ' + posts.length + '</p>';
+  html += '<p style="color:#cbd5e1;margin:8px 0 0 0;font-size:13px;">' + totalScanned + ' posts scanned | ' + totalFiltered + ' cloud matches | Top ' + posts.length + '</p>';
   html += '</div>';
 
   html += '<div style="background:#faf5ff;border:1px solid #d8b4fe;border-radius:8px;padding:12px 16px;margin-bottom:12px;">';
@@ -518,7 +505,7 @@ function sendEmail(posts, totalScanned, totalFiltered) {
   html += '</p></div>';
 
   html += '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:12px 16px;margin-bottom:16px;">';
-  html += '<p style="margin:0;font-size:13px;color:#065f46;">Pick 3-4 posts > Open on Reddit > Write helpful comment > Mention ZopNight/ZopDay naturally</p>';
+  html += '<p style="margin:0;font-size:13px;color:#065f46;">Pick 3-4 posts | Open on Reddit | Write helpful comment | Mention ZopNight/ZopDay naturally</p>';
   html += '</div>';
 
   for (var i = 0; i < posts.length; i++) {
@@ -529,36 +516,33 @@ function sendEmail(posts, totalScanned, totalFiltered) {
     var matchType = post.hasProductMatch ? "[Direct match]" : "[Cloud discussion]";
 
     html += '<div style="background:white;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #e2e8f0;">';
-
     html += '<div style="margin-bottom:12px;">';
-    html += '<span style="background:#1e293b;color:white;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;">#' + (i+1) + ' | r/' + escapeHtml(post.subreddit) + '</span> ';
+    html += '<span style="background:#1e293b;color:white;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;">#' + (i+1) + ' | r/' + esc(post.subreddit) + '</span> ';
     html += '<span style="background:' + scoreColor + ';color:white;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;">' + post.overall.toFixed(1) + '/10</span> ';
     html += '<span style="background:' + productColor + ';color:white;padding:4px 8px;border-radius:20px;font-size:11px;font-weight:700;">' + post.product + '</span> ';
     html += '<span style="font-size:11px;color:#64748b;">' + matchType + '</span>';
     html += '</div>';
 
-    html += '<a href="' + post.permalink + '" style="color:#0f172a;text-decoration:none;font-size:16px;font-weight:600;line-height:1.4;">' + escapeHtml(post.title) + '</a>';
-    html += '<p style="color:#64748b;font-size:13px;margin:8px 0;">Up: ' + post.score + ' | Comments: ' + post.num_comments + ' | ' + ageStr + ' | u/' + escapeHtml(post.author) + '</p>';
+    html += '<a href="' + post.permalink + '" style="color:#0f172a;text-decoration:none;font-size:16px;font-weight:600;line-height:1.4;">' + esc(post.title) + '</a>';
+    html += '<p style="color:#64748b;font-size:13px;margin:8px 0;">Up: ' + post.score + ' | Comments: ' + post.num_comments + ' | ' + ageStr + ' | u/' + esc(post.author) + '</p>';
 
-    if (post.why) {
-      html += '<p style="color:#334155;font-size:13px;margin:8px 0;"><strong>Why:</strong> ' + escapeHtml(post.why) + '</p>';
-    }
+    if (post.why) html += '<p style="color:#334155;font-size:13px;margin:8px 0;"><strong>Why:</strong> ' + esc(post.why) + '</p>';
 
     var allM = (post.nightMatches || []).concat(post.dayMatches || []);
     if (allM.length > 0) {
       html += '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;margin:10px 0;">';
-      html += '<p style="margin:0;font-size:12px;color:#166534;"><strong>[v] Context:</strong> ' + escapeHtml(allM.join(" | ")) + '</p>';
+      html += '<p style="margin:0;font-size:12px;color:#166534;"><strong>[v] Context:</strong> ' + esc(allM.join(" | ")) + '</p>';
       html += '</div>';
     }
 
     if (post.selftext && post.selftext.length > 0) {
-      var preview = post.selftext.substring(0, 250).replace(/\n/g, " ");
-      if (post.selftext.length > 250) preview += "...";
-      html += '<p style="color:#475569;font-size:13px;margin:8px 0;line-height:1.5;background:#f8fafc;padding:10px;border-radius:6px;border-left:3px solid #e2e8f0;">' + escapeHtml(preview) + '</p>';
+      var preview = post.selftext.substring(0, 200).replace(/\n/g, " ");
+      if (post.selftext.length > 200) preview += "...";
+      html += '<p style="color:#475569;font-size:13px;margin:8px 0;background:#f8fafc;padding:10px;border-radius:6px;border-left:3px solid #e2e8f0;">' + esc(preview) + '</p>';
     }
 
     html += '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;margin:12px 0;">';
-    html += '<p style="margin:0;font-size:13px;color:#9a3412;line-height:1.6;"><strong>How to comment:</strong><br>' + escapeHtml(post.angle) + '</p>';
+    html += '<p style="margin:0;font-size:13px;color:#9a3412;line-height:1.6;"><strong>How to comment:</strong><br>' + esc(post.angle) + '</p>';
     html += '</div>';
 
     html += '<a href="' + post.permalink + '" style="display:inline-block;background:#f97316;color:white;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;margin-top:8px;">Open on Reddit</a>';
@@ -566,7 +550,7 @@ function sendEmail(posts, totalScanned, totalFiltered) {
   }
 
   html += '<div style="text-align:center;padding:16px;color:#94a3b8;font-size:12px;">';
-  html += 'Reddit Scout v7 | <a href="https://zop.dev/zopnight" style="color:#f97316;">ZopNight</a> | <a href="https://zop.dev/zopday" style="color:#f97316;">ZopDay</a>';
+  html += 'Reddit Scout v8 | <a href="https://zop.dev/zopnight" style="color:#f97316;">ZopNight</a> | <a href="https://zop.dev/zopday" style="color:#f97316;">ZopDay</a>';
   html += '</div></div>';
 
   GmailApp.sendEmail(YOUR_EMAIL,
@@ -580,6 +564,6 @@ function sendEmptyEmail(total) {
     "Scanned " + total + " posts (last " + MAX_AGE_DAYS + " days). No qualifying cloud posts found. Trying again tomorrow.");
 }
 
-function escapeHtml(t) {
+function esc(t) {
   return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
