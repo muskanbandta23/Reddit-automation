@@ -3,6 +3,7 @@ import { fetchAllSubreddits } from "@/app/lib/reddit";
 import { filterPosts } from "@/app/lib/filter";
 import { scoreAllPosts } from "@/app/lib/scorer";
 import { saveScanResult } from "@/app/lib/storage";
+import { sendDailyEmail } from "@/app/lib/email";
 import { DailyScanResult } from "@/app/lib/types";
 
 export const maxDuration = 300; // 5 minutes (requires Vercel Pro for full duration)
@@ -42,6 +43,12 @@ export async function GET(request: NextRequest) {
 
     const blobUrl = await saveScanResult(result);
 
+    // Phase 5: Send email notification (if configured)
+    let emailSent = false;
+    if (scoredPosts.length > 0) {
+      emailSent = await sendDailyEmail(result);
+    }
+
     const duration = Math.round((Date.now() - startTime) / 1000);
     console.log(`[Cron] Pipeline completed in ${duration}s`);
 
@@ -52,6 +59,7 @@ export async function GET(request: NextRequest) {
       scored: scoredPosts.length,
       duration: `${duration}s`,
       blobUrl,
+      emailSent,
     });
   } catch (error) {
     console.error("[Cron] Pipeline failed:", error);

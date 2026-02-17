@@ -26,10 +26,11 @@ interface RedditApiChild {
 
 async function fetchSubredditPosts(
   subreddit: string,
-  sort: "hot" | "new",
+  sort: "hot" | "new" | "top",
   retries = 3
 ): Promise<RedditPost[]> {
-  const url = `${REDDIT_BASE}/r/${subreddit}/${sort}.json?limit=100&raw_json=1`;
+  const timeParam = sort === "top" ? "&t=week" : "";
+  const url = `${REDDIT_BASE}/r/${subreddit}/${sort}.json?limit=100&raw_json=1${timeParam}`;
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -103,6 +104,16 @@ export async function fetchAllSubreddits(): Promise<RedditPost[]> {
     console.log(`[Reddit] Fetching /r/${subreddit}/new...`);
     const newPosts = await fetchSubredditPosts(subreddit, "new");
     for (const post of newPosts) {
+      if (!allPosts.has(post.id)) {
+        allPosts.set(post.id, post);
+      }
+    }
+    await sleep(REQUEST_DELAY_MS);
+
+    // Fetch top posts this week (catches high-engagement posts that fell off hot)
+    console.log(`[Reddit] Fetching /r/${subreddit}/top (week)...`);
+    const topPosts = await fetchSubredditPosts(subreddit, "top");
+    for (const post of topPosts) {
       if (!allPosts.has(post.id)) {
         allPosts.set(post.id, post);
       }
