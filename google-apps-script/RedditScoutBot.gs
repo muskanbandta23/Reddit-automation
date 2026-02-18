@@ -603,3 +603,24 @@ function esc(t) {
   if (!t) return "";
   return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
+
+
+// ===========================================================
+// SETUP: Run this ONCE to create daily auto-trigger
+// ===========================================================
+function setupDailyTrigger() {
+  // Delete any old triggers first
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  // Create new daily trigger at 9:00 AM IST
+  ScriptApp.newTrigger("dailyScan")
+    .timeBased()
+    .everyDays(1)
+    .atHour(9)
+    .inTimezone("Asia/Kolkata")
+    .create();
+  Logger.log("Daily trigger set! Bot will run every day at 9:00 AM IST.");
+  Logger.log("You will get an email with 8 Reddit posts every morning.");
+}
