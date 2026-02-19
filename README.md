@@ -215,4 +215,4 @@ All emojis have been removed from the code. If you see ????, you may be running 
 
 ---
 
-*Built by [ZopDev](https://zop.dev) for daily Reddit engagement on cloud cost optimization topics.*
+*Built by Muskan Bandta ([ZopDev](https://zop.dev)) for daily Reddit engagement on cloud cost optimization topics.*
