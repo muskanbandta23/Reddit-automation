@@ -173,39 +173,9 @@ reddit-scout/
 
 ---
 
-## Version History
-
-| Version | Changes |
-|---------|---------|
-| v1-v3 | Initial keyword-based search, restricted to target subreddits |
-| v4 | Added cloud relevance hard filter, expanded queries |
-| v5 | Context-aware matching with ZopNight/ZopDay product contexts |
-| v6 | 3-layer scoring (product + cloud + engagement), broader matching |
-| v7 | Removed emojis (showed as ???? in Gmail), expanded to 25 subreddits |
-| v8 | Optimized for 6-min GAS limit (15 subs, 8 queries, time safety) |
-| v9 | Switched to old.reddit.com to avoid blocks |
-| v10 | Reddit OAuth API approach (required credentials) |
-| v11 | **Current** - Auto-tests 3 Reddit domains, full browser headers, no credentials needed |
-
 ---
 
-## Troubleshooting
 
-### "Scanned 0 posts"
-Reddit is blocking requests from Google's servers. The v11 bot auto-tests 3 different Reddit domains and uses whichever works. Check the Execution Log for details.
-
-### "Exceeded maximum execution time"
-The bot has a 5-minute safety limit (GAS allows 6 min). If you see this, reduce `TARGET_SUBREDDITS` to fewer subreddits.
-
-### Emojis showing as ????
-All emojis have been removed from the code. If you see ????, you may be running an older version.
-
-### Not getting enough posts
-- Lower the `overall < 3.0` threshold in `scoreAllPosts()` to `2.0`
-- Increase `MAX_AGE_DAYS` from 4 to 7
-- Add more subreddits to `TARGET_SUBREDDITS`
-
----
 
 ## Built With
 
