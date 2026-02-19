@@ -1,37 +1,48 @@
 /**
  * ============================================================
- * REDDIT SCOUT BOT v9 - FIXED: Uses old.reddit.com (no blocks)
+ * REDDIT SCOUT BOT v10 - Uses Reddit OAuth API (never blocked)
  * ============================================================
  *
- * v8 Problem: www.reddit.com returns 403 to Google Apps Script
- *             servers, so 0 posts were fetched.
+ * Previous versions used public .json URLs which Reddit blocks
+ * from Google Apps Script servers (returns 403 = 0 posts).
  *
- * v9 Fixes:
- *   - Uses old.reddit.com (does NOT block server requests)
- *   - Better User-Agent string
- *   - Debug logging shows response codes
- *   - Fewer search queries (5) + more feed browsing = reliable
- *   - Fits within 6 minute GAS execution limit
+ * v10 uses Reddit OAuth (script-to-script) which is the OFFICIAL
+ * way to access Reddit from servers. Never gets blocked.
  *
- * Finds 8 cloud-related Reddit posts from last 4 days
- * where you can naturally talk about ZopNight or ZopDay.
+ * ONE-TIME SETUP (5 minutes):
+ *   1. Go to https://www.reddit.com/prefs/apps
+ *   2. Click "create another app" at bottom
+ *   3. Name: RedditScoutBot
+ *   4. Type: select "script"
+ *   5. Redirect URI: http://localhost
+ *   6. Click "create app"
+ *   7. Copy the Client ID (under the app name) and Secret
+ *   8. Paste them below in REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET
+ *   9. Put your Reddit username and password below
  *
- * COST: $0 (completely free)
+ * COST: $0 (Reddit API is free, 60 requests/min)
  * ============================================================
  */
+
+// ---- CHANGE THESE 4 VALUES ----
+var REDDIT_CLIENT_ID = "PASTE_YOUR_CLIENT_ID_HERE";
+var REDDIT_CLIENT_SECRET = "PASTE_YOUR_CLIENT_SECRET_HERE";
+var REDDIT_USERNAME = "PASTE_YOUR_REDDIT_USERNAME";
+var REDDIT_PASSWORD = "PASTE_YOUR_REDDIT_PASSWORD";
+// --------------------------------
 
 var YOUR_EMAIL = "muskan.bandta@zop.dev";
 var MAX_AGE_DAYS = 4;
 var TARGET_POST_COUNT = 8;
 
-// 12 best subreddits for cloud cost discussions
+// 12 cloud subreddits
 var TARGET_SUBREDDITS = [
   "aws", "devops", "cloudcomputing", "sysadmin", "kubernetes",
   "FinOps", "googlecloud", "azure", "terraform", "docker",
   "sre", "startups"
 ];
 
-// 5 focused search queries (reliable, fast)
+// 5 search queries
 var SEARCH_QUERIES = [
   "cloud cost",
   "AWS bill",
@@ -143,7 +154,6 @@ var ZOPDAY_CONTEXTS = [
               "trusted advisor", "aws advisor", "cost explorer"] }
 ];
 
-// Broad cloud signals
 var BROAD_CLOUD_SIGNALS = [
   {phrases: ["aws", "amazon web services"], weight: 4},
   {phrases: ["azure", "microsoft azure"], weight: 4},
@@ -171,15 +181,63 @@ var BROAD_CLOUD_SIGNALS = [
 
 
 // ===========================================================
+// REDDIT OAUTH - Gets access token (server-to-server)
+// ===========================================================
+function getRedditToken() {
+  var tokenUrl = "https://www.reddit.com/api/v1/access_token";
+  var creds = Utilities.base64Encode(REDDIT_CLIENT_ID + ":" + REDDIT_CLIENT_SECRET);
+
+  var response = UrlFetchApp.fetch(tokenUrl, {
+    method: "post",
+    headers: {
+      "Authorization": "Basic " + creds,
+      "User-Agent": "RedditScoutBot/10.0 by " + REDDIT_USERNAME
+    },
+    payload: {
+      "grant_type": "password",
+      "username": REDDIT_USERNAME,
+      "password": REDDIT_PASSWORD
+    },
+    muteHttpExceptions: true
+  });
+
+  var code = response.getResponseCode();
+  if (code != 200) {
+    Logger.log("OAuth FAILED: HTTP " + code + " - " + response.getContentText());
+    return null;
+  }
+
+  var data = JSON.parse(response.getContentText());
+  if (!data.access_token) {
+    Logger.log("OAuth FAILED: No token in response - " + response.getContentText());
+    return null;
+  }
+
+  Logger.log("OAuth OK - got access token");
+  return data.access_token;
+}
+
+
+// ===========================================================
 // MAIN
 // ===========================================================
 function dailyScan() {
-  Logger.log("Reddit Scout v9 - Starting scan...");
+  Logger.log("Reddit Scout v10 - Starting scan...");
   var startTime = new Date().getTime();
 
-  var allPosts = fetchPosts(startTime);
+  // Step 1: Get OAuth token
+  var token = getRedditToken();
+  if (!token) {
+    GmailApp.sendEmail(YOUR_EMAIL, "Reddit Scout - OAuth Error",
+      "Could not get Reddit API token. Please check your Client ID, Secret, Username and Password in the script settings.\n\nGo to https://www.reddit.com/prefs/apps to get your credentials.");
+    return;
+  }
+
+  // Step 2: Fetch posts using OAuth
+  var allPosts = fetchPosts(startTime, token);
   Logger.log("Collected " + allPosts.length + " posts in " + Math.round((new Date().getTime() - startTime)/1000) + "s");
 
+  // Step 3: Score and filter
   var scored = scoreAllPosts(allPosts);
   Logger.log("Qualifying: " + scored.length);
 
@@ -195,39 +253,38 @@ function dailyScan() {
 
 
 // ===========================================================
-// FETCH - Uses old.reddit.com (NOT www.reddit.com which blocks)
+// FETCH - Uses OAuth API (oauth.reddit.com) - NEVER blocked
 // ===========================================================
-function fetchPosts(startTime) {
+function fetchPosts(startTime, token) {
   var seen = {};
   var results = [];
   var now = Math.floor(Date.now() / 1000);
   var maxAge = MAX_AGE_DAYS * 86400;
-  var fetchErrors = 0;
-  var fetchSuccess = 0;
+  var fetchOK = 0;
+  var fetchFail = 0;
 
   for (var s = 0; s < TARGET_SUBREDDITS.length; s++) {
-    // Safety: stop if running too long (5 min = 300000ms)
     if (new Date().getTime() - startTime > 300000) {
-      Logger.log("  TIME LIMIT - stopping fetch at r/" + TARGET_SUBREDDITS[s]);
+      Logger.log("  TIME LIMIT - stopping at r/" + TARGET_SUBREDDITS[s]);
       break;
     }
 
     var sub = TARGET_SUBREDDITS[s];
     var count = 0;
 
-    // Strategy 1: Search queries (5 per sub)
+    // Search queries
     for (var q = 0; q < SEARCH_QUERIES.length; q++) {
       if (new Date().getTime() - startTime > 300000) break;
 
-      var searchUrl = "https://old.reddit.com/r/" + sub + "/search.json"
+      var searchUrl = "https://oauth.reddit.com/r/" + sub + "/search"
         + "?q=" + encodeURIComponent(SEARCH_QUERIES[q])
         + "&restrict_sr=1&sort=new&t=week&limit=25&raw_json=1";
 
-      var posts = doFetch(searchUrl);
+      var posts = doFetch(searchUrl, token);
       if (posts === null) {
-        fetchErrors++;
+        fetchFail++;
       } else {
-        fetchSuccess++;
+        fetchOK++;
         for (var j = 0; j < posts.length; j++) {
           var p = posts[j];
           if (seen[p.id]) continue;
@@ -239,22 +296,22 @@ function fetchPosts(startTime) {
           count++;
         }
       }
-      Utilities.sleep(1200);
+      Utilities.sleep(1100);
     }
 
-    // Strategy 2: Browse hot + new + top feeds (3 per sub)
+    // Hot + New + Top feeds
     var feeds = ["hot", "new", "top"];
     for (var f = 0; f < feeds.length; f++) {
       if (new Date().getTime() - startTime > 300000) break;
 
-      var feedUrl = "https://old.reddit.com/r/" + sub + "/" + feeds[f] + ".json?limit=50&raw_json=1";
+      var feedUrl = "https://oauth.reddit.com/r/" + sub + "/" + feeds[f] + "?limit=50&raw_json=1";
       if (feeds[f] === "top") feedUrl += "&t=week";
 
-      var feedPosts = doFetch(feedUrl);
+      var feedPosts = doFetch(feedUrl, token);
       if (feedPosts === null) {
-        fetchErrors++;
+        fetchFail++;
       } else {
-        fetchSuccess++;
+        fetchOK++;
         for (var fp = 0; fp < feedPosts.length; fp++) {
           var p2 = feedPosts[fp];
           if (seen[p2.id]) continue;
@@ -266,32 +323,31 @@ function fetchPosts(startTime) {
           count++;
         }
       }
-      Utilities.sleep(1200);
+      Utilities.sleep(1100);
     }
 
     Logger.log("  r/" + sub + ": " + count + " posts");
   }
 
-  Logger.log("Fetch stats: " + fetchSuccess + " OK, " + fetchErrors + " errors");
+  Logger.log("Fetch stats: " + fetchOK + " OK, " + fetchFail + " failed");
   return results;
 }
 
 
-// Single fetch function - uses old.reddit.com
-function doFetch(url) {
+// Fetch using OAuth token - uses oauth.reddit.com
+function doFetch(url, token) {
   try {
     var options = {
       muteHttpExceptions: true,
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; GoogleAppsScript)"
-      },
-      followRedirects: true
+        "Authorization": "Bearer " + token,
+        "User-Agent": "RedditScoutBot/10.0 by " + REDDIT_USERNAME
+      }
     };
 
     var r = UrlFetchApp.fetch(url, options);
     var code = r.getResponseCode();
 
-    // Rate limited - wait and retry once
     if (code == 429) {
       Logger.log("  429 rate limit - waiting 10s...");
       Utilities.sleep(10000);
@@ -304,8 +360,7 @@ function doFetch(url) {
       return null;
     }
 
-    var text = r.getContentText();
-    var data = JSON.parse(text);
+    var data = JSON.parse(r.getContentText());
     if (!data || !data.data || !data.data.children) return [];
 
     var children = data.data.children;
@@ -318,7 +373,7 @@ function doFetch(url) {
         id: d.id,
         title: d.title || "",
         selftext: d.selftext || "",
-        subreddit: d.subreddit || sub,
+        subreddit: d.subreddit || "",
         author: d.author || "unknown",
         score: d.score || 0,
         num_comments: d.num_comments || 0,
@@ -343,7 +398,6 @@ function scoreAllPosts(posts) {
     var post = posts[idx];
     var text = (post.title + " " + post.selftext).toLowerCase();
 
-    // Layer 1: Product context
     var nightScore = 0, nightMatches = [];
     for (var i = 0; i < ZOPNIGHT_CONTEXTS.length; i++) {
       var ctx = ZOPNIGHT_CONTEXTS[i];
@@ -368,7 +422,6 @@ function scoreAllPosts(posts) {
     }
     var productContextScore = Math.min((nightScore + dayScore) / 3, 10);
 
-    // Layer 2: Broad cloud
     var cloudScore = 0;
     for (var c = 0; c < BROAD_CLOUD_SIGNALS.length; c++) {
       var sig = BROAD_CLOUD_SIGNALS[c];
@@ -383,7 +436,6 @@ function scoreAllPosts(posts) {
 
     if (cloudScore < 0.5 && productContextScore < 0.5) continue;
 
-    // Layer 3: Engagement
     var engagement = 1;
     if (post.num_comments >= 2) engagement += 1;
     if (post.num_comments >= 5) engagement += 1;
@@ -436,7 +488,6 @@ function scoreAllPosts(posts) {
     scored.push(post);
   }
 
-  // Sort: product matches first, then by score
   scored.sort(function(a, b) {
     if (a.hasProductMatch && !b.hasProductMatch) return -1;
     if (!a.hasProductMatch && b.hasProductMatch) return 1;
@@ -520,7 +571,7 @@ function generateWhy(post, allMatches, hasProductMatch) {
 
 
 // ===========================================================
-// EMAIL - No emojis anywhere
+// EMAIL - No emojis
 // ===========================================================
 function sendEmail(posts, totalScanned, totalFiltered) {
   var today = Utilities.formatDate(new Date(), "Asia/Kolkata", "EEEE, MMMM d, yyyy");
@@ -585,7 +636,7 @@ function sendEmail(posts, totalScanned, totalFiltered) {
   }
 
   html += '<div style="text-align:center;padding:16px;color:#94a3b8;font-size:12px;">';
-  html += 'Reddit Scout v9 | <a href="https://zop.dev/zopnight" style="color:#f97316;">ZopNight</a> | <a href="https://zop.dev/zopday" style="color:#f97316;">ZopDay</a>';
+  html += 'Reddit Scout v10 | <a href="https://zop.dev/zopnight" style="color:#f97316;">ZopNight</a> | <a href="https://zop.dev/zopday" style="color:#f97316;">ZopDay</a>';
   html += '</div></div>';
 
   GmailApp.sendEmail(YOUR_EMAIL,
@@ -606,21 +657,18 @@ function esc(t) {
 
 
 // ===========================================================
-// SETUP: Run this ONCE to create daily auto-trigger
+// SETUP: Run ONCE to create daily trigger (9 AM IST)
 // ===========================================================
 function setupDailyTrigger() {
-  // Delete any old triggers first
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     ScriptApp.deleteTrigger(triggers[i]);
   }
-  // Create new daily trigger at 9:00 AM IST
   ScriptApp.newTrigger("dailyScan")
     .timeBased()
     .everyDays(1)
     .atHour(9)
     .inTimezone("Asia/Kolkata")
     .create();
-  Logger.log("Daily trigger set! Bot will run every day at 9:00 AM IST.");
-  Logger.log("You will get an email with 8 Reddit posts every morning.");
+  Logger.log("Daily trigger created! Bot runs every day at 9 AM IST.");
 }
